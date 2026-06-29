@@ -1,6 +1,6 @@
 {
   "name": "meigong-assistant",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "main": "build-electron/electron/main.js",
@@ -25,7 +25,7 @@
   },
   "build": {
     "appId": "com.meigong.assistant",
-    "productName": "美工助手",
+    "productName": "Meigong Assistant",
     "electronDist": "node_modules/electron/dist",
     "electronVersion": "42.5.0",
     "directories": {
@@ -37,6 +37,9 @@
       "package.json"
     ],
     "asar": true,
+    "asarUnpack": [
+      "dist/**/*"
+    ],
     "win": {
       "signAndEditExecutable": false,
       "target": [
@@ -47,7 +50,7 @@
           ]
         }
       ],
-      "artifactName": "美工助手-${version}.exe"
+      "artifactName": "meigong-web-launcher-${version}.exe"
     }
   },
   "devDependencies": {

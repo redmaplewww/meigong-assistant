@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, shell } from "electron";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, join, normalize } from "node:path";
@@ -8,7 +8,8 @@ import { handleDeepSeekPlan } from "../server/deepseekProxy.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const appRoot = app.isPackaged ? app.getAppPath() : join(__dirname, "..", "..");
-const distDir = join(appRoot, "dist");
+const unpackedDistDir = join(process.resourcesPath, "app.asar.unpacked", "dist");
+const distDir = app.isPackaged && existsSync(unpackedDistDir) ? unpackedDistDir : join(appRoot, "dist");
 
 const contentTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
@@ -20,8 +21,9 @@ const contentTypes: Record<string, string> = {
   ".svg": "image/svg+xml; charset=utf-8",
 };
 
-let mainWindow: BrowserWindow | undefined;
+let launcherWindow: BrowserWindow | undefined;
 let localServer: ReturnType<typeof createServer> | undefined;
+let appUrl = "";
 
 type DeepSeekConfig = typeof deepSeekDefaults;
 
@@ -54,17 +56,29 @@ function resolveDeepSeekConfig(): DeepSeekConfig {
   };
 }
 
+function sendText(res: ServerResponse, statusCode: number, text: string): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end(text);
+}
+
 function sendFile(res: ServerResponse, path: string): void {
   res.statusCode = 200;
   res.setHeader("Content-Type", contentTypes[extname(path).toLowerCase()] ?? "application/octet-stream");
-  createReadStream(path).pipe(res);
+
+  const stream = createReadStream(path);
+  stream.on("error", () => sendText(res, 404, "File not found"));
+  stream.pipe(res);
 }
 
 function safeStaticPath(req: IncomingMessage): string {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const decodedPath = decodeURIComponent(url.pathname);
-  const normalizedPath = normalize(decodedPath).replace(/^(\.\.[/\\])+/, "");
-  const requestedPath = join(distDir, normalizedPath === "/" ? "index.html" : normalizedPath);
+  const normalizedPath = normalize(decodedPath).replace(/^[/\\]+/, "");
+  const safeRelativePath = !normalizedPath || normalizedPath === "." || normalizedPath.startsWith("..")
+    ? "index.html"
+    : normalizedPath;
+  const requestedPath = join(distDir, safeRelativePath);
   return requestedPath.startsWith(distDir) ? requestedPath : join(distDir, "index.html");
 }
 
@@ -75,7 +89,13 @@ function serveStatic(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  sendFile(res, join(distDir, "index.html"));
+  const fallbackPath = join(distDir, "index.html");
+  if (existsSync(fallbackPath)) {
+    sendFile(res, fallbackPath);
+    return;
+  }
+
+  sendText(res, 500, "美工助手网页资源缺失，请重新下载完整安装包。");
 }
 
 function startLocalServer(): Promise<number> {
@@ -104,14 +124,71 @@ function startLocalServer(): Promise<number> {
   });
 }
 
-async function createMainWindow(): Promise<void> {
-  const port = await startLocalServer();
-  mainWindow = new BrowserWindow({
-    width: 1500,
-    height: 960,
-    minWidth: 1180,
-    minHeight: 760,
-    title: "美工助手",
+function launcherHtml(url: string): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>美工助手启动器</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+        background: #f5f7fb;
+        color: #1f2937;
+      }
+      main {
+        padding: 28px;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 22px;
+      }
+      p {
+        margin: 8px 0;
+        line-height: 1.6;
+        color: #4b5563;
+      }
+      a {
+        display: inline-block;
+        margin-top: 18px;
+        padding: 10px 16px;
+        border-radius: 8px;
+        background: #0b70b7;
+        color: white;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      code {
+        display: block;
+        margin-top: 14px;
+        padding: 8px;
+        border-radius: 6px;
+        background: #e5e7eb;
+        word-break: break-all;
+        color: #374151;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>美工助手已启动</h1>
+      <p>已在系统默认浏览器中打开网页。关闭这个小窗口会停止本地服务。</p>
+      <a href="${url}" target="_blank" rel="noreferrer">重新打开网页</a>
+      <code>${url}</code>
+    </main>
+  </body>
+</html>`;
+}
+
+function createLauncherWindow(url: string): void {
+  launcherWindow = new BrowserWindow({
+    width: 520,
+    height: 300,
+    resizable: false,
+    maximizable: false,
+    title: "美工助手启动器",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -119,16 +196,64 @@ async function createMainWindow(): Promise<void> {
     },
   });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+  launcherWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (/^https?:\/\//i.test(targetUrl)) void shell.openExternal(targetUrl);
     return { action: "deny" };
   });
 
-  await mainWindow.loadURL(`http://127.0.0.1:${port}/`);
+  launcherWindow.webContents.on("will-navigate", (event, targetUrl) => {
+    if (/^https?:\/\//i.test(targetUrl)) {
+      event.preventDefault();
+      void shell.openExternal(targetUrl);
+    }
+  });
+
+  launcherWindow.on("closed", () => {
+    launcherWindow = undefined;
+    localServer?.close();
+    app.quit();
+  });
+
+  void launcherWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(launcherHtml(url))}`);
 }
 
-app.whenReady().then(createMainWindow).catch((error) => {
-  console.error(error);
+async function launchWebApp(): Promise<void> {
+  const port = await startLocalServer();
+  appUrl = `http://127.0.0.1:${port}/`;
+  await shell.openExternal(appUrl);
+  createLauncherWindow(appUrl);
+}
+
+function showStartupError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  dialog.showErrorBox("美工助手启动失败", `本地网页服务没有启动成功。\n\n${message}`);
+}
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (appUrl) void shell.openExternal(appUrl);
+    if (launcherWindow) {
+      if (launcherWindow.isMinimized()) launcherWindow.restore();
+      launcherWindow.focus();
+    }
+  });
+}
+
+process.on("uncaughtException", (error) => {
+  showStartupError(error);
+  app.quit();
+});
+
+process.on("unhandledRejection", (error) => {
+  showStartupError(error);
+  app.quit();
+});
+
+app.whenReady().then(launchWebApp).catch((error) => {
+  showStartupError(error);
   app.quit();
 });
 
@@ -138,5 +263,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (!BrowserWindow.getAllWindows().length) void createMainWindow();
+  if (appUrl) {
+    void shell.openExternal(appUrl);
+    if (launcherWindow) launcherWindow.focus();
+  } else {
+    void launchWebApp();
+  }
 });

@@ -10,7 +10,7 @@
 - 图层、文字、形状、表格、图标、素材槽位可编辑
 - 统一主色、参数胶囊、表格配色和模板套装主题绑定
 - PNG、JPG、SKU、整套导出
-- Windows portable exe 打包
+- Windows 网页启动器 exe 打包
 
 ## 本地开发
 
@@ -52,4 +52,4 @@ npm run build:electron
 npm run dist:win
 ```
 
-打包后的 portable exe 位于 `release/美工助手-0.1.0.exe`。公开分发时建议作为 GitHub Release 附件上传，避免把大体积二进制文件直接放进源码提交。
+打包后的网页启动器位于 `release/meigong-web-launcher-0.1.1.exe`。双击后会启动本地服务，并自动用系统默认浏览器打开美工助手网页。公开分发时建议作为 GitHub Release 附件上传，避免把大体积二进制文件直接放进源码提交。

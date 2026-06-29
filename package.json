@@ -1,0 +1,65 @@
+{
+  "name": "meigong-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "build-electron/electron/main.js",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "clean:electron": "node -e \"fs.rmSync('build-electron',{recursive:true,force:true})\"",
+    "build:electron": "npm run clean:electron && tsc -p tsconfig.electron.json",
+    "dist:win": "npm run build && npm run build:electron && electron-builder --win portable",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "jsonrepair": "^3.14.1",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "com.meigong.assistant",
+    "productName": "美工助手",
+    "electronDist": "node_modules/electron/dist",
+    "electronVersion": "42.5.0",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "build-electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "美工助手-${version}.exe"
+    }
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

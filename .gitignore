@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+deepseek.config.json
+node_modules/
+dist/
+build-electron/
+release/*
+*.log
+tsconfig.tsbuildinfo

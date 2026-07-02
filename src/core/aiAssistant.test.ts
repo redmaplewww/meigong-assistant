@@ -48,23 +48,23 @@ describe("AI assistant draft planner", () => {
     expect(draft.actions.length).toBeGreaterThan(2);
   });
 
-  it("creates a deep red board variant instead of falling back to blue", () => {
+  it("treats a red board request as theme color instead of creating a material variant", () => {
     const materials = createDefaultMaterialLibrary();
+    const suite = createTemplateSuite(createDefaultProject(), sku);
     const draft = createAssistantDraft("深红底板 产品放大 标题醒目 全部 SKU", {
       materials,
       currentSelection: { "bottom-board": "bottom-board-classic" },
       sku,
       scope: "all-skus",
+      templates: suite.templates,
     });
 
-    expect(draft.materialSelection["bottom-board"]).toBe("ai-bottom-board-deep-red");
-    expect(draft.materialCreations).toHaveLength(1);
-    expect(draft.materialCreations[0]).toMatchObject({
-      slot: "bottom-board",
-      fromMaterialId: "bottom-board-deep",
-      name: "深红斜切底板",
+    expect(draft.theme?.id).toBe("red");
+    expect(draft.materialSelection["bottom-board"]).toBe("bottom-board-classic");
+    expect(draft.materialCreations).toHaveLength(0);
+    expect(draft.templatePatches["hero-main"]["bottom-board"]).toMatchObject({
+      colorReplacements: expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
     });
-    expect(draft.materialSelection["bottom-board"]).not.toBe("bottom-board-deep");
   });
 
   it("applies assistant patches without replacing real product assets", () => {
@@ -89,7 +89,7 @@ describe("AI assistant draft planner", () => {
     });
   });
 
-  it("turns a unified red color request into theme, material, and table color changes", () => {
+  it("turns a unified red color request into theme and color patches without touching materials", () => {
     const materials = createDefaultMaterialLibrary();
     const suite = createTemplateSuite(createDefaultProject(), sku);
     const draft = createAssistantDraft("配色统一改成红色，商品名尺寸合适，产品图不要盖字", {
@@ -107,17 +107,77 @@ describe("AI assistant draft planner", () => {
     });
 
     expect(draft.theme?.id).toBe("red");
-    expect(draft.materialSelection["spec-pill"]).toBe("ai-spec-pill-red");
-    expect(draft.materialSelection["service-tile"]).toBe("ai-service-tile-red");
-    expect(draft.materialSelection["search-strip"]).toBe("ai-search-strip-red");
-    expect(draft.materialCreations.map((creation) => creation.slot)).toEqual(
-      expect.arrayContaining(["bottom-board", "spec-pill", "service-tile", "search-strip", "logo"]),
-    );
+    expect(draft.materialSelection).toMatchObject({
+      "bottom-board": "bottom-board-classic",
+      "spec-pill": "spec-pill-blue",
+      "service-tile": "service-tile-blue",
+      "search-strip": "search-strip-blue",
+      logo: "logo-wayiii-classic",
+    });
+    expect(draft.materialCreations).toHaveLength(0);
     expect(draft.templateCreations).toHaveLength(0);
+    expect(draft.templatePatches["hero-main"]["spec-pill"]).toMatchObject({
+      colorReplacements: expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
+    });
+    expect(draft.templatePatches["service-promise"]["service-tile-0"]).toMatchObject({
+      colorReplacements: expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
+    });
+    expect(draft.templatePatches["detail-page"]["detail-search"]).toMatchObject({
+      colorReplacements: expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
+    });
     expect(draft.templatePatches["spec-table"]["specs-table"]).toMatchObject({
       headerFill: "#b51e2c",
       stripeFill: "#f5d9de",
       textColor: "#4f0b15",
     });
+  });
+
+  it("creates a service deliverable from natural language without requiring style keywords", () => {
+    const materials = createDefaultMaterialLibrary();
+    const suite = createTemplateSuite(createDefaultProject(), sku);
+    const draft = createAssistantDraft("生成一张售后服务的新图，服务项先随便填", {
+      materials,
+      currentSelection: {},
+      sku,
+      scope: "current-sku",
+      templates: suite.templates,
+    });
+
+    expect(draft.templateCreations).toHaveLength(1);
+    expect(draft.templateCreations[0]).toMatchObject({
+      fromTemplateId: "service-promise",
+    });
+    expect(draft.warnings.join("\n")).not.toMatch(/明显样式指令|DeepSeek/);
+  });
+
+  it("creates an after-sales rules image when the user asks for policy conditions", () => {
+    const materials = createDefaultMaterialLibrary();
+    const suite = createTemplateSuite(createDefaultProject(), sku);
+    const draft = createAssistantDraft("生成一份售后规则图，什么情况可以售后什么情况不可以售后", {
+      materials,
+      currentSelection: {},
+      sku,
+      scope: "current-sku",
+      templates: suite.templates,
+    });
+
+    expect(draft.templateCreations).toHaveLength(1);
+    expect(draft.templateCreations[0]).toMatchObject({
+      fromTemplateId: "service-promise",
+    });
+  });
+
+  it("does not create a new template for ordinary batch finished-image output", () => {
+    const materials = createDefaultMaterialLibrary();
+    const suite = createTemplateSuite(createDefaultProject(), sku);
+    const draft = createAssistantDraft("把主图和参数表配色改一下，批量出成品图", {
+      materials,
+      currentSelection: {},
+      sku,
+      scope: "all-skus",
+      templates: suite.templates,
+    });
+
+    expect(draft.templateCreations).toHaveLength(0);
   });
 });

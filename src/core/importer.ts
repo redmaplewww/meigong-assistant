@@ -1,5 +1,6 @@
 import { buildSkuCatalogFromPaths, normalizePath } from "./catalog";
 import type { Asset, Sku, SkuAssets } from "./types";
+import { applySpecToSku, type ParsedSpec } from "./specParser";
 
 function attachUrlToAsset(asset: Asset | undefined, urls: Map<string, string>): Asset | undefined {
   if (!asset) return undefined;
@@ -34,16 +35,38 @@ export interface ImportedCatalog {
   revoke: () => void;
 }
 
-export function buildCatalogFromFiles(files: File[]): ImportedCatalog {
+export interface SingleAssetImportInput {
+  productFile: File;
+  detailFile: File;
+  drawingFile?: File;
+  spec?: ParsedSpec;
+}
+
+function safeFileName(file: File, fallback: string): string {
+  const normalized = normalizePath(file.name);
+  return normalized.split("/").filter(Boolean).pop() || fallback;
+}
+
+export function buildCatalogFromSingleAssets(input: SingleAssetImportInput): ImportedCatalog {
   const urls = new Map<string, string>();
-  const paths = files.map((file) => {
-    const relativePath = normalizePath((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
-    urls.set(relativePath, URL.createObjectURL(file));
-    return relativePath;
-  });
+  const paths: string[] = [];
+  const productPath = normalizePath(`single-import/SingleImport/AUTO-SKU/product/${safeFileName(input.productFile, "product.png")}`);
+  const detailPath = normalizePath(`single-import/SingleImport/AUTO-SKU/detail/${safeFileName(input.detailFile, "detail.png")}`);
+
+  urls.set(productPath, URL.createObjectURL(input.productFile));
+  urls.set(detailPath, URL.createObjectURL(input.detailFile));
+  paths.push(productPath, detailPath);
+
+  if (input.drawingFile) {
+    const drawingPath = normalizePath(`single-import/SingleImport/AUTO-SKU/drawing/${safeFileName(input.drawingFile, "drawing.png")}`);
+    urls.set(drawingPath, URL.createObjectURL(input.drawingFile));
+    paths.push(drawingPath);
+  }
 
   return {
-    catalog: attachAssetUrls(buildSkuCatalogFromPaths(paths), urls),
+    catalog: attachAssetUrls(buildSkuCatalogFromPaths(paths, { assetMode: "typed-folders" }), urls).map((sku) =>
+      input.spec ? applySpecToSku(sku, input.spec) : sku,
+    ),
     revoke: () => {
       urls.forEach((url) => URL.revokeObjectURL(url));
     },

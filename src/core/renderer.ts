@@ -1,4 +1,4 @@
-import type { ImageLayer, Layer, ShapeLayer, TableLayer, Template, TextLayer } from "./types";
+import type { ImageLayer, Layer, MaterialColorReplacement, ShapeLayer, TableLayer, Template, TextLayer } from "./types";
 
 export interface Rect {
   x: number;
@@ -169,6 +169,30 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+function svgFromDataUrl(url: string): string | undefined {
+  const match = /^data:image\/svg\+xml(?:;charset=[^,]+)?,(.+)$/i.exec(url);
+  if (!match) return undefined;
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return undefined;
+  }
+}
+
+function applySvgColorReplacements(url: string, replacements: MaterialColorReplacement[] | undefined): string {
+  if (!replacements?.length) return url;
+  const svg = svgFromDataUrl(url);
+  if (!svg) return url;
+
+  const recolored = replacements.reduce((current, replacement) => {
+    const pattern = new RegExp(replacement.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    return current.replace(pattern, replacement.to);
+  }, svg);
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(recolored)}`;
+}
+
 function getAlphaBounds(img: HTMLImageElement, cacheKey: string): Rect | null {
   if (alphaBoundsCache.has(cacheKey)) return alphaBoundsCache.get(cacheKey) ?? null;
 
@@ -209,12 +233,13 @@ function getAlphaBounds(img: HTMLImageElement, cacheKey: string): Rect | null {
 
 async function drawImageLayer(ctx: CanvasRenderingContext2D, layer: ImageLayer): Promise<void> {
   if (!layer.imageUrl || layer.assetMissing) return;
-  const img = await loadImage(layer.imageUrl);
+  const imageUrl = applySvgColorReplacements(layer.imageUrl, layer.colorReplacements);
+  const img = await loadImage(imageUrl);
 
   withLayerTransform(ctx, layer, () => {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    const alphaBounds = layer.assetRole === "productTransparent" ? getAlphaBounds(img, layer.imageUrl ?? layer.id) : null;
+    const alphaBounds = layer.assetRole === "productTransparent" ? getAlphaBounds(img, imageUrl ?? layer.id) : null;
     const source = alphaBounds ?? { x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight };
     const rect = fitRect({ width: source.width, height: source.height }, layer, layer.fit);
     if (layer.shadow) {

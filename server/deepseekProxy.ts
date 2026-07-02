@@ -14,7 +14,10 @@ interface DeepSeekMessage {
 }
 
 const maxBodyBytes = 220_000;
-const templateCreationPattern = /新模板|新版式|另做一版|多做一张|自己做模板|创建模板|模板能力/;
+const explicitTemplateCreationPattern = /新模板|新版式|新图层|新增图层|创建图层|另做一版|多做一张|做一张|出一张|生成一张|新图|服务图|售后图|服务承诺|售后服务|自己做模板|创建模板|模板能力|new template|template variant|add layer|new image|service image|after-sales/i;
+const generatedDeliverablePattern = /((生成|做|出)(一张|一份|一个|新的?|全新)[^，。；\n]*(图|页面|页|模板|版式|主图|详情|参数|服务|售后|规则|政策|承诺)|(创建|新建)(一张|一份|一个)?[^，。；\n]*(图|页面|页|模板|版式|主图|详情|参数|服务|售后|规则|政策|承诺))/i;
+const afterSalesRulesPattern = /(售后|退换|退货|换货|保修|质保)[^，。；\n]*(规则|政策|说明|条件|范围|可售后|不可售后|图|页面|页)|(规则|政策|说明|条件|范围)[^，。；\n]*(售后|退换|退货|换货|保修|质保)|(什么情况|哪些情况)[^，。；\n]*(售后|退换|退货|换货|保修|质保)/i;
+const materialCreationPattern = /素材库|素材|创建.*素材|新建.*素材|保存.*素材|加入.*素材|material library|create material|save material/i;
 const redBoardPattern = /深红|酒红|暗红|红色底板|红底板|红色|red|crimson|burgundy/i;
 const redThemePattern = /(配色|统一|整体|全局|全套|风格|颜色|色系).*(深红|酒红|暗红|红色|red|crimson|burgundy)|(深红|酒红|暗红|红色|red|crimson|burgundy).*(配色|统一|整体|全局|全套|风格|颜色|色系)/i;
 const deepRedBoardReplacements = [
@@ -43,6 +46,7 @@ const redThemeReplacements = [
   { from: "#e5eef5", to: "#f9eaec" },
   { from: "#e5eff7", to: "#f9eaec" },
 ];
+const themeableImageSlots = new Set(["bottom-board", "top-cap", "logo", "promo-badge", "service-tile", "search-strip", "spec-pill"]);
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -75,7 +79,12 @@ function uniqueSlug(base: string, usedIds: Set<string>): string {
 
 export function requestNeedsTemplateCreation(requestBody: unknown): boolean {
   const context = asRecord(requestBody);
-  return /新模板|新版式|新图层|新增图层|创建图层|另做一版|多做一张|自己做模板|创建模板|模板能力|new template|template variant|add layer/i.test(asString(context.prompt));
+  const prompt = asString(context.prompt);
+  return (
+    explicitTemplateCreationPattern.test(prompt) ||
+    generatedDeliverablePattern.test(prompt) ||
+    afterSalesRulesPattern.test(prompt)
+  );
 }
 
 function hasUsableTemplateCreations(plan: unknown): boolean {
@@ -133,7 +142,8 @@ function materialText(material: Record<string, unknown>): string {
 }
 
 function requestNeedsDeepRedBoard(requestBody: unknown): boolean {
-  return redBoardPattern.test(asString(asRecord(requestBody).prompt));
+  const prompt = asString(asRecord(requestBody).prompt);
+  return redBoardPattern.test(prompt) && materialCreationPattern.test(prompt);
 }
 
 function findExistingDeepRedBoard(requestBody: unknown): Record<string, unknown> | undefined {
@@ -259,45 +269,20 @@ function requestNeedsRedTheme(requestBody: unknown): boolean {
   return redThemePattern.test(asString(asRecord(requestBody).prompt));
 }
 
-function findExistingRedMaterialForSlot(requestBody: unknown, slot: string): Record<string, unknown> | undefined {
-  return asArray(asRecord(requestBody).materials)
-    .map(asRecord)
-    .find((material) => asString(material.slot) === slot && /红|red|crimson|burgundy/i.test(materialText(material)));
+function isThemeVariantMaterialId(materialId: string): boolean {
+  return /^(ai-|theme-).*(red|crimson|burgundy|theme|[0-9a-f]{6})/i.test(materialId);
 }
 
-function chooseBaseMaterialForSlot(requestBody: unknown, slot: string, preferredIds: string[]): Record<string, unknown> | undefined {
-  const materials = asArray(asRecord(requestBody).materials)
-    .map(asRecord)
-    .filter((material) => asString(material.slot) === slot && asString(material.id));
-  if (!materials.length) return undefined;
-  return preferredIds.map((id) => materials.find((material) => asString(material.id) === id)).find(Boolean) ?? materials[0];
-}
-
-function withRedThemeReplacementDefaults(creation: Record<string, unknown>): Record<string, unknown> {
-  const replacements = asArray(creation.colorReplacements).map(asRecord);
-  const existingFromColors = new Set(replacements.map((replacement) => asString(replacement.from).toLowerCase()));
-  const mergedReplacements = [
-    ...replacements,
-    ...redThemeReplacements.filter((replacement) => !existingFromColors.has(replacement.from.toLowerCase())),
-  ];
-
-  return {
-    ...creation,
-    colorReplacements: mergedReplacements,
-    tags: Array.from(new Set([...asArray(creation.tags).map((tag) => asString(tag)).filter(Boolean), "red", "theme:red", "红色"])),
-  };
-}
-
-function redThemeMaterialSpecs() {
-  return [
-    { slot: "bottom-board", preferredIds: ["bottom-board-deep", "bottom-board-classic"], materialId: "ai-bottom-board-deep-red", name: "红色底板" },
-    { slot: "top-cap", preferredIds: ["top-cap-blue-panel"], materialId: "ai-top-cap-red", name: "红色顶板" },
-    { slot: "logo", preferredIds: ["logo-wayiii-classic", "logo-wayiii-stamp"], materialId: "ai-logo-wayiii-classic-red", name: "红色LOGO" },
-    { slot: "promo-badge", preferredIds: ["promo-badge-soft"], materialId: "ai-promo-badge-red", name: "红色促销角标" },
-    { slot: "service-tile", preferredIds: ["service-tile-blue"], materialId: "ai-service-tile-red", name: "红色服务块" },
-    { slot: "search-strip", preferredIds: ["search-strip-blue"], materialId: "ai-search-strip-red", name: "红色搜索条" },
-    { slot: "spec-pill", preferredIds: ["spec-pill-blue"], materialId: "ai-spec-pill-red", name: "红色参数胶囊" },
-  ];
+function stripThemeVariantMaterialSelection(requestBody: unknown, selection: unknown): Record<string, unknown> {
+  const materials = asArray(asRecord(requestBody).materials).map(asRecord);
+  return Object.fromEntries(
+    Object.entries(asRecord(selection)).filter(([slot, materialId]) => {
+      const id = asString(materialId);
+      if (!id) return false;
+      if (materials.some((material) => asString(material.slot) === slot && asString(material.id) === id)) return true;
+      return !isThemeVariantMaterialId(id);
+    }),
+  );
 }
 
 function buildRedThemeTemplatePatches(requestBody: unknown): Record<string, unknown> {
@@ -333,6 +318,15 @@ function buildRedThemeTemplatePatches(requestBody: unknown): Record<string, unkn
     const templateId = asString(template.id);
     const kind = asString(template.kind);
     const layerPatches = pickExistingPatches(template, patchByKind[kind] ?? {});
+    asArray(template.layers).map(asRecord).forEach((layer) => {
+      const layerId = asString(layer.id);
+      const materialSlot = asString(layer.materialSlot);
+      if (!layerId || !themeableImageSlots.has(materialSlot)) return;
+      layerPatches[layerId] = {
+        ...asRecord(layerPatches[layerId]),
+        colorReplacements: redThemeReplacements,
+      };
+    });
     if (Object.keys(layerPatches).length) patches[templateId] = layerPatches;
   });
 
@@ -357,41 +351,8 @@ export function ensureRedThemeWhenRequested(requestBody: unknown, plan: unknown)
   if (!requestNeedsRedTheme(requestBody)) return plan;
 
   const record = asRecord(plan);
-  const materialSelection: Record<string, unknown> = { ...asRecord(record.materialSelection) };
-  const materialCreations = asArray(record.materialCreations).map(asRecord);
-
-  redThemeMaterialSpecs().forEach((spec) => {
-    const existingRed = findExistingRedMaterialForSlot(requestBody, spec.slot);
-    if (existingRed) {
-      materialSelection[spec.slot] = asString(existingRed.id);
-      return;
-    }
-
-    const existingCreationIndex = materialCreations.findIndex((creation) => asString(creation.slot) === spec.slot);
-    if (existingCreationIndex >= 0) {
-      const normalized = withRedThemeReplacementDefaults(materialCreations[existingCreationIndex]);
-      materialCreations[existingCreationIndex] = normalized;
-      materialSelection[spec.slot] = asString(normalized.materialId);
-      return;
-    }
-
-    const base = chooseBaseMaterialForSlot(requestBody, spec.slot, spec.preferredIds);
-    if (!base) return;
-    const materialId = spec.slot === "logo" && asString(base.id) !== "logo-wayiii-classic" ? `ai-${asString(base.id)}-red` : spec.materialId;
-    materialSelection[spec.slot] = materialId;
-    materialCreations.push({
-      id: `material-${materialId}`,
-      slot: spec.slot,
-      fromMaterialId: asString(base.id),
-      materialId,
-      name: spec.name,
-      reason: "用户要求统一红色配色，基于现有 SVG 素材确定性改色。",
-      colorReplacements: redThemeReplacements,
-      tags: ["red", "theme:red", "红色"],
-    });
-  });
-
-  return discardTemplateCreationsUnlessRequested(requestBody, {
+  const allowMaterialCreation = materialCreationPattern.test(asString(asRecord(requestBody).prompt));
+  const nextRecord: Record<string, unknown> = {
     ...record,
     theme: {
       id: "red",
@@ -404,8 +365,9 @@ export function ensureRedThemeWhenRequested(requestBody: unknown, plan: unknown)
       border: "#d8a3aa",
       textOnPrimary: "#ffffff",
     },
-    materialSelection,
-    materialCreations,
+    materialSelection: allowMaterialCreation
+      ? { ...asRecord(record.materialSelection) }
+      : stripThemeVariantMaterialSelection(requestBody, record.materialSelection),
     templatePatches: mergeNestedPatches(record.templatePatches, buildRedThemeTemplatePatches(requestBody)),
     actions: [
       ...asArray(record.actions),
@@ -415,7 +377,15 @@ export function ensureRedThemeWhenRequested(requestBody: unknown, plan: unknown)
         detail: "服务端已补齐参数胶囊、字体、表格和可改色 SVG 素材，避免蓝色残留。",
       },
     ],
-  });
+  };
+
+  if (allowMaterialCreation && asArray(record.materialCreations).length) {
+    nextRecord.materialCreations = asArray(record.materialCreations).map(asRecord);
+  } else {
+    delete nextRecord.materialCreations;
+  }
+
+  return discardTemplateCreationsUnlessRequested(requestBody, nextRecord);
 }
 
 function chooseBaseTemplate(requestBody: unknown): Record<string, unknown> | undefined {
@@ -679,22 +649,24 @@ function buildMessages(requestBody: unknown): DeepSeekMessage[] {
     "- materialSelection 只能使用上下文 materials 中存在的 id。",
     "- 例外：materialSelection 可以引用本次 materialCreations 中新建的 materialId。",
     "- materialCreations 只能基于 fromMaterialId 克隆现有素材并替换颜色，不能生成整张图或引用外部图片。",
-    "- 如果用户要求某种颜色底板但素材库没有，比如深红/酒红/暗红，必须用 materialCreations 基于最接近的底板创建颜色变体，再在 materialSelection 里选中新 materialId。",
+    "- 配色和素材必须分离：theme/templatePatches 控制颜色，materialSelection 只控制底板、LOGO、胶囊等素材形状或图案选择。",
+    "- 如果用户要求某种颜色底板但没有明确说“创建素材/保存到素材库”，不要创建 materialCreations；应通过 theme 或 image 图层 colorReplacements 改色。",
+    "- 只有用户明确要求新增/保存/加入素材库时，materialCreations 才能基于 fromMaterialId 克隆现有素材并替换颜色。",
     "- templatePatches 只能修改上下文 templates 中存在的 template id 和 layer id。",
     "- templateCreations 必须基于 fromTemplateId 克隆现有模板；patches 修改已有图层，newLayers 可新增 text/shape/table/icon 图层。",
     "- newLayers 不允许新增外部 imageUrl 或整张 AI 图片；新增形状可用 shape=rect|pill|ellipse|line，文字和表格可指定 fontFamily。",
     "- 参数胶囊属于 shape 图层，允许通过 patches 修改 shape、radius、fill、stroke、strokeWidth、x/y/width/height。",
-    "- 如果用户只是要求配色、布局、字体、内容、批量套版或出一组成品图，不要创建 templateCreations；应修改固定成品图类型里的现有图层。",
-    "- 只有用户明确说“新模板/新版式/另做一版/多做一张/创建模板”时才允许 templateCreations。",
-    "- 如果用户要求“配色统一改成红色/整体红色/红色系”，必须返回 theme，并同步 materialCreations/materialSelection/templatePatches，覆盖参数胶囊、服务块、搜索条、LOGO、表格、标题文字和详情页颜色。",
+    "- 如果用户只是要求修改当前成品图的配色、布局、字体、内容或批量套版，应修改固定成品图类型里的现有图层。",
+    "- 如果用户要求生成一张/一份新的成品图、服务图、售后规则图、售后政策图、参数图、工程图、详情图，或表达“新模板/新版式/另做一版/多做一张/创建模板”，请用 templateCreations；你要根据任务语义判断，不要等待固定样式关键词。",
+    "- 如果用户要求“配色统一改成红色/整体红色/红色系”，必须返回 theme，并同步 templatePatches，覆盖参数胶囊、服务块、搜索条、LOGO、表格、标题文字和详情页颜色；不要因为配色变化创建 materialCreations 或切换到 ai-*-red 素材。",
     "- 配色统一时不能只改底板；蓝色参数胶囊、蓝色文字、蓝色表头和详情参数表都必须改成同一色系。",
     "- 商品名必须在图层宽度内，产品图和标题、参数胶囊、底部卖点之间必须保留至少 24px 间距，产品图不能覆盖文字。",
     "- 不要输出 imageUrl、assetId、assetRole、source、children。",
     "- 如果用户要求新风格模板，请用 templateCreations 基于最接近的现有模板创建。",
-    "- 如果用户说“深红/酒红/暗红”，不能用深蓝底板替代；没有现成红色底板时必须创建红色底板变体。",
+    "- 如果用户说“深红/酒红/暗红”，不能用深蓝配色替代；默认通过 theme/templatePatches 改成红色系，只有明确要求保存素材时才创建红色底板素材。",
     "- 如果用户说“深蓝/高级/科技/斜切”，必须优先在 bottom-board 槽位选择名称或 id 含 deep/深蓝/斜切的素材。",
     "- 如果用户说“经典/蓝白/默认”，才选择经典底板。",
-    "- 如果用户说“新模板/新版式/另做一版/多做一张/自己做模板”，必须返回至少 1 个 templateCreations。",
+    "- 如果用户说“新模板/新版式/另做一版/多做一张/自己做模板/生成一张新图/生成一份售后规则图/售后服务图/售后政策图”，必须返回至少 1 个 templateCreations。",
     "- 如果用户说“产品放大/主体突出”，必须修改 product-main 或 white-product-image 的 x/y/width/height。",
     "- 如果用户说“标题醒目/大字”，必须修改相关 text 图层 fontSize。",
     "- 如果用户要求批量套版，保持 SKU 的真实商品图、标题、参数由原模板数据承载。",

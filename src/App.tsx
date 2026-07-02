@@ -5,7 +5,15 @@ import { Inspector } from "./components/Inspector";
 import { LeftSidebar } from "./components/LeftSidebar";
 import { MaterialLibraryPanel } from "./components/MaterialLibraryPanel";
 import { TopBar } from "./components/TopBar";
-import { buildCatalogFromFiles } from "./core/importer";
+import { buildCatalogFromSingleAssets } from "./core/importer";
+import { extractSpecDocument, type SpecDocumentProgress } from "./core/specDocument";
+import {
+  isSingleImportReady,
+  markSpecDocumentExtracted,
+  markSpecDocumentParsing,
+  missingSingleImportItems,
+  type SingleImportFiles,
+} from "./core/singleImportState";
 import { downloadBlob, exportAllSkuZip, exportSkuZip, exportTemplate } from "./core/exporter";
 import {
   applyTemplateCreationsToTemplates,
@@ -24,7 +32,7 @@ import {
   createTemplateSet,
 } from "./core/materials";
 import { createDefaultProject, createTemplateSuite, mergeLayerPatch, validateTemplate } from "./core/templates";
-import { applyThemeToTemplate, createPaletteFromPrimary, createThemeMaterialPlan } from "./core/theme";
+import { applyThemeToTemplate, createPaletteFromPrimary } from "./core/theme";
 import type { Layer, LayerType, MaterialAsset, MaterialSelection, MaterialSlot, MaterialTemplateSet, Project, Sku, Template } from "./core/types";
 import {
   chooseNewestWorkspace,
@@ -43,13 +51,17 @@ import "./styles.css";
 
 type AddableLayerType = Extract<LayerType, "text" | "shape" | "table" | "icon">;
 
-function fileToDataUrl(file: File): Promise<string> {
+function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(reader.error ?? new Error("素材读取失败"));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return blobToDataUrl(file);
 }
 
 function buildTemplateMap(project: Project, catalog: Sku[]): TemplateMap {
@@ -101,6 +113,22 @@ function applyTemplateSetToTemplateMap(
         templateSet.templateCreations,
       ),
     ]),
+  );
+}
+
+function ensureTemplateMapForCatalog(
+  project: Project,
+  catalog: Sku[],
+  templateMap: TemplateMap,
+  selection: MaterialSelection,
+  materials: MaterialAsset[],
+): TemplateMap {
+  const generated = applySelectionToTemplateMap(buildTemplateMap(project, catalog), selection, materials);
+  return Object.fromEntries(
+    catalog.map((sku) => {
+      const savedTemplates = templateMap[sku.id];
+      return [sku.id, savedTemplates?.length ? savedTemplates : generated[sku.id] ?? []];
+    }),
   );
 }
 
@@ -258,6 +286,10 @@ function projectColorFallback(background: string): string {
   return background === "#ffffff" ? "#0b70b7" : "#b51e2c";
 }
 
+function makeSkuId(model: string): string {
+  return `sku-${model.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-").replace(/^-+|-+$/g, "") || "imported"}-${Date.now()}`;
+}
+
 export default function App() {
   const initialCatalog = useMemo(() => [...webSampleCatalog, ...sampleCatalog], []);
   const defaultProject = useMemo(() => createDefaultProject(), []);
@@ -281,18 +313,23 @@ export default function App() {
   const [assistantDraft, setAssistantDraft] = useState<AssistantDraft | undefined>();
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantError, setAssistantError] = useState<string | undefined>();
-  const [templatesBySku, setTemplatesBySku] = useState<TemplateMap>(() =>
-    persistedWorkspace?.templatesBySku && Object.keys(persistedWorkspace.templatesBySku).length
-      ? persistedWorkspace.templatesBySku
-      : applySelectionToTemplateMap(buildTemplateMap(defaultProject, initialCatalog), initialSelection, initialMaterials),
-  );
+  const [templatesBySku, setTemplatesBySku] = useState<TemplateMap>(() => {
+    const nextProject = persistedWorkspace?.project ?? defaultProject;
+    const nextMaterials = persistedWorkspace?.materials?.length ? persistedWorkspace.materials : initialMaterials;
+    const nextSelection = persistedWorkspace?.materialSelection ?? initialSelection;
+    return ensureTemplateMapForCatalog(nextProject, initialCatalog, persistedWorkspace?.templatesBySku ?? {}, nextSelection, nextMaterials);
+  });
   const [selectedSkuId, setSelectedSkuId] = useState(persistedWorkspace?.selectedSkuId ?? initialCatalog[0]?.id ?? "");
   const [selectedTemplateId, setSelectedTemplateId] = useState(persistedWorkspace?.selectedTemplateId ?? "hero-main");
   const [selectedLayerId, setSelectedLayerId] = useState(persistedWorkspace?.selectedLayerId ?? "product-main");
   const [zoom, setZoom] = useState(0.42);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState("样例素材已载入");
+  const [status, setStatus] = useState("请选择商品图、详情图和规格书，然后点击创建 SKU");
+  const [singleImportFiles, setSingleImportFiles] = useState<SingleImportFiles>({});
+  const [specProgress, setSpecProgress] = useState<SpecDocumentProgress | undefined>();
 
+  const singleImportFilesRef = useRef<SingleImportFiles>({});
+  const specImportRequestIdRef = useRef(0);
   const persistenceReady = useRef(false);
 
   const selectedSku = useMemo(() => catalog.find((sku) => sku.id === selectedSkuId) ?? catalog[0], [catalog, selectedSkuId]);
@@ -300,6 +337,7 @@ export default function App() {
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? templates[0];
   const selectedLayer = selectedTemplate?.layers.find((layer) => layer.id === selectedLayerId);
   const issues = selectedTemplate ? validateTemplate(selectedTemplate) : [];
+  const canCreateSku = isSingleImportReady(singleImportFiles) && !busy;
 
   function createWorkspaceSnapshot(): WorkspaceSnapshot {
     return {
@@ -319,9 +357,7 @@ export default function App() {
   function applyWorkspaceSnapshot(snapshot: WorkspaceSnapshot): void {
     const nextMaterials = snapshot.materials.length ? snapshot.materials : initialMaterials;
     const nextSelection = Object.keys(snapshot.materialSelection).length ? snapshot.materialSelection : defaultMaterialSelection(nextMaterials);
-    const nextTemplates = Object.keys(snapshot.templatesBySku).length
-      ? snapshot.templatesBySku
-      : applySelectionToTemplateMap(buildTemplateMap(snapshot.project, initialCatalog), nextSelection, nextMaterials);
+    const nextTemplates = ensureTemplateMapForCatalog(snapshot.project, initialCatalog, snapshot.templatesBySku, nextSelection, nextMaterials);
 
     setProject(snapshot.project);
     setMaterials(nextMaterials);
@@ -366,6 +402,11 @@ export default function App() {
     saveLocalWorkspace(snapshot);
     void saveIndexedWorkspace(snapshot);
   }, [project, materials, materialSelection, templateSets, templatesBySku, selectedSkuId, selectedTemplateId, selectedLayerId]);
+
+  function updateSingleImportFiles(nextFiles: SingleImportFiles): void {
+    singleImportFilesRef.current = nextFiles;
+    setSingleImportFiles(nextFiles);
+  }
 
   function updateTemplate(skuId: string, templateId: string, updater: (template: Template) => Template): void {
     setTemplatesBySku((current) => ({
@@ -443,47 +484,99 @@ export default function App() {
     if (templateSet) setStatus(`已删除模板套装：${templateSet.name}`);
   }
 
-  function restoreSample(): void {
-    const nextProject = createDefaultProject();
-    const nextCatalog = [...webSampleCatalog, ...sampleCatalog];
-    const nextMaterials = createDefaultMaterialLibrary();
-    const nextSelection = defaultMaterialSelection(nextMaterials);
-    setProject(nextProject);
-    setMaterials(nextMaterials);
-    setMaterialSelection(nextSelection);
-    setTemplateSets([
-      createTemplateSet("蓝白工业套装", nextSelection, undefined, undefined, undefined, undefined, undefined, {
-        primaryColor: nextProject.brand.primaryColor,
-        secondaryColor: nextProject.brand.secondaryColor,
-      }),
-    ]);
-    setCatalog(nextCatalog);
-    setTemplatesBySku(applySelectionToTemplateMap(buildTemplateMap(nextProject, nextCatalog), nextSelection, nextMaterials));
-    setSelectedSkuId(nextCatalog[0]?.id ?? "");
-    setSelectedTemplateId("hero-main");
-    setSelectedLayerId("product-main");
-    setAssistantDraft(undefined);
-    setAssistantError(undefined);
-    setStatus("样例素材已载入");
-  }
-
-  function importFiles(files: File[]): void {
-    if (!files.length) return;
-    const imported = buildCatalogFromFiles(files);
+  function createSkuFromSelectedAssets(): void {
+    const files = singleImportFilesRef.current;
+    if (!isSingleImportReady(files)) {
+      setStatus(`还不能创建 SKU：请继续选择${missingSingleImportItems(files).join("、")}`);
+      return;
+    }
+    const imported = buildCatalogFromSingleAssets({
+      productFile: files.product,
+      detailFile: files.detail,
+      drawingFile: files.drawing,
+      spec: files.parsedSpec,
+    });
     if (!imported.catalog.length) {
-      setStatus("未识别到 SKU 素材");
+      setStatus("未导入素材：请重新选择 1 张商品图、1 张详情图和 1 份规格书");
       imported.revoke();
       return;
     }
 
-    setCatalog(imported.catalog);
-    setTemplatesBySku(applySelectionToTemplateMap(buildTemplateMap(project, imported.catalog), materialSelection, materials));
-    setSelectedSkuId(imported.catalog[0].id);
+    const importedSku: Sku = {
+      ...imported.catalog[0],
+      id: makeSkuId(imported.catalog[0].model),
+      family: "Imported",
+    };
+    const nextTemplates = applySelectionToTemplateMap(buildTemplateMap(project, [importedSku]), materialSelection, materials)[importedSku.id] ?? [];
+    setCatalog((current) => [importedSku, ...current]);
+    setTemplatesBySku((current) => ({
+      ...current,
+      [importedSku.id]: nextTemplates,
+    }));
+    setSelectedSkuId(importedSku.id);
     setSelectedTemplateId("hero-main");
     setSelectedLayerId("product-main");
     setAssistantDraft(undefined);
     setAssistantError(undefined);
-    setStatus(`${imported.catalog.length} 个 SKU 已导入`);
+    updateSingleImportFiles({});
+    setSpecProgress(undefined);
+    const warningText = files.warnings?.length ? `；提示：${files.warnings.join("；")}` : "";
+    setStatus(`已创建 SKU：${importedSku.model}。现在可以在此 SKU 上调整模板、素材和 AI 套版${warningText}`);
+  }
+
+  async function selectProductImage(file: File): Promise<void> {
+    const nextFiles = { ...singleImportFilesRef.current, product: file };
+    updateSingleImportFiles(nextFiles);
+    const missing = missingSingleImportItems(nextFiles);
+    setStatus(
+      missing.length
+        ? `已选择商品图：${file.name}，请继续选择${missing.join("、")}`
+        : `素材已齐全：${file.name}。请点击“创建 SKU”`,
+    );
+  }
+
+  async function selectDetailImage(file: File): Promise<void> {
+    const nextFiles = { ...singleImportFilesRef.current, detail: file };
+    updateSingleImportFiles(nextFiles);
+    const missing = missingSingleImportItems(nextFiles);
+    setStatus(
+      missing.length
+        ? `已选择详情图：${file.name}，请继续选择${missing.join("、")}`
+        : `素材已齐全：${file.name}。请点击“创建 SKU”`,
+    );
+  }
+
+  async function selectSpecDocument(file: File): Promise<void> {
+    const requestId = specImportRequestIdRef.current + 1;
+    specImportRequestIdRef.current = requestId;
+    const parsingFiles = markSpecDocumentParsing(singleImportFilesRef.current, file);
+    updateSingleImportFiles(parsingFiles);
+    setBusy(true);
+    setSpecProgress({ stage: "loading", message: `已选择规格书：${file.name}，准备解析`, percent: 0 });
+    setStatus(`已选择规格书：${file.name}，准备解析`);
+    try {
+      const extracted = await extractSpecDocument(file, {
+        onProgress: (progress) => {
+          if (specImportRequestIdRef.current !== requestId) return;
+          setSpecProgress(progress);
+          setStatus(progress.message);
+        },
+      });
+      if (specImportRequestIdRef.current !== requestId || singleImportFilesRef.current.specFile !== file) return;
+      const nextFiles = markSpecDocumentExtracted(singleImportFilesRef.current, file, extracted);
+      updateSingleImportFiles(nextFiles);
+      const warningText = extracted.warnings.length ? `；提示：${extracted.warnings.join("；")}` : "";
+      const missing = missingSingleImportItems(nextFiles);
+      setStatus(
+        missing.length
+          ? `已解析规格书并提取工程图：${file.name}，请继续选择${missing.join("、")}${warningText}`
+          : `素材已齐全，规格书已解析：${file.name}。请点击“创建 SKU”${warningText}`,
+      );
+    } catch (error) {
+      if (specImportRequestIdRef.current === requestId) setStatus(error instanceof Error ? error.message : "规格书解析失败");
+    } finally {
+      if (specImportRequestIdRef.current === requestId) setBusy(false);
+    }
   }
 
   function exportWorkspaceBackup(): void {
@@ -543,8 +636,17 @@ export default function App() {
           setSelectedTemplateId(templateId);
           setSelectedLayerId(nextTemplate?.layers[0]?.id ?? "");
         }}
-        onImportFiles={importFiles}
-        onRestoreSample={restoreSample}
+        singleImportProductName={singleImportFiles.product?.name}
+        singleImportDetailName={singleImportFiles.detail?.name}
+        singleImportSpecName={singleImportFiles.specFile?.name}
+        singleImportWarnings={singleImportFiles.warnings}
+        specProgress={specProgress}
+        canCreateSku={canCreateSku}
+        createSkuBusy={busy}
+        onSelectProductImage={selectProductImage}
+        onSelectDetailImage={selectDetailImage}
+        onSelectSpecDocument={selectSpecDocument}
+        onCreateSku={createSkuFromSelectedAssets}
       />
 
       <div className="material-pane">
@@ -733,8 +835,7 @@ export default function App() {
         onDuplicateTemplate={duplicateSelectedTemplate}
         onProjectColor={(color) => {
           const palette = createPaletteFromPrimary(color, "手动配色");
-          const themePlan = createThemeMaterialPlan(materials, materialSelection, palette);
-          const nextMaterials = applyMaterialCreationsToLibrary(materials, themePlan.materialCreations);
+          const previousPalette = createPaletteFromPrimary(project.brand.primaryColor, "当前配色");
           setProject((current) => ({
             ...current,
             brand: {
@@ -743,17 +844,11 @@ export default function App() {
               secondaryColor: palette.secondary,
             },
           }));
-          setMaterials(nextMaterials);
-          setMaterialSelection(themePlan.materialSelection);
           setTemplatesBySku((current) =>
             Object.fromEntries(
               Object.entries(current).map(([skuId, skuTemplates]) => [
                 skuId,
-                skuTemplates.map((template) =>
-                  enforceTemplateSafety(
-                    applyMaterialSelectionToTemplate(applyThemeToTemplate(template, palette), themePlan.materialSelection, nextMaterials),
-                  ),
-                ),
+                skuTemplates.map((template) => enforceTemplateSafety(applyThemeToTemplate(template, palette, previousPalette))),
               ]),
             ),
           );

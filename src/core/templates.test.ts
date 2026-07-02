@@ -116,4 +116,31 @@ describe("Waiyii Blue Industrial templates", () => {
       expect.arrayContaining([expect.objectContaining({ code: "text-overflow-risk", layerId: "invoice-text" })]),
     );
   });
+
+  it("uses the dedicated detail image in the detail template instead of the main product image", () => {
+    const detailSku = {
+      ...sku,
+      assets: {
+        ...sku.assets,
+        detailSlices: [
+          {
+            id: "asset-detail",
+            type: "detail-slice" as const,
+            name: "detail.jpg",
+            path: "3.5-SMP/KK/detail/detail.jpg",
+            url: "/3.5-SMP/KK/detail/detail.jpg",
+          },
+        ],
+      },
+    };
+    const detailTemplate = createTemplateSuite(createDefaultProject(), detailSku).templates.find((template) => template.kind === "detail");
+    const detailProductLayer = detailTemplate?.layers.find((layer) => layer.id === "detail-product");
+
+    expect(detailProductLayer).toMatchObject({
+      type: "image",
+      assetRole: "detailSlices",
+      assetId: "asset-detail",
+      imageUrl: "/3.5-SMP/KK/detail/detail.jpg",
+    });
+  });
 });

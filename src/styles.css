@@ -102,6 +102,25 @@ button:disabled {
   gap: 8px;
 }
 
+.single-import-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr;
+  margin-bottom: 8px;
+}
+
+.single-import-button {
+  font-size: 12px;
+  font-weight: 800;
+  width: 100%;
+}
+
+.single-import-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .button-row.compact {
   margin-bottom: 10px;
 }
@@ -150,12 +169,89 @@ button:disabled {
   color: #0b70b7;
 }
 
+.icon-button:disabled {
+  background: #edf1f5;
+  border-color: #d4dde7;
+  color: #8a98a8;
+  cursor: not-allowed;
+}
+
+.icon-button.primary-action:not(:disabled) {
+  background: #0b70b7;
+  border-color: #0b70b7;
+  color: #ffffff;
+}
+
+.icon-button.primary-action:not(:disabled):hover {
+  background: #095f9b;
+  border-color: #095f9b;
+  color: #ffffff;
+}
+
 .icon-button.wide {
   flex: 1;
 }
 
 .hidden-input {
   display: none;
+}
+
+.import-guide {
+  background: #eef4f8;
+  border: 1px solid #d2deea;
+  border-radius: 8px;
+  color: #4d5f75;
+  display: grid;
+  gap: 4px;
+  line-height: 1.35;
+  margin-top: 10px;
+  padding: 9px 10px;
+}
+
+.import-guide strong {
+  color: #1f2f43;
+  font-size: 12px;
+}
+
+.import-guide span {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ocr-progress {
+  background: #ffffff;
+  border: 1px solid #d3dfeb;
+  border-radius: 6px;
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 7px;
+}
+
+.ocr-progress-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ocr-progress-row strong,
+.ocr-progress-row span {
+  font-size: 11px;
+}
+
+.ocr-progress-track {
+  background: #e4edf5;
+  border-radius: 999px;
+  height: 7px;
+  overflow: hidden;
+}
+
+.ocr-progress-fill {
+  background: #0b70b7;
+  border-radius: inherit;
+  height: 100%;
+  min-width: 8px;
+  transition: width 180ms ease;
 }
 
 .panel-section {

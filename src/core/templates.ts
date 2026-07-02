@@ -559,6 +559,8 @@ function makeWhiteTemplate(sku: Sku): Template {
 }
 
 function makeDetailTemplate(project: Project, sku: Sku): Template {
+  const detailImage = sku.assets.detailSlices[0];
+
   return {
     id: "detail-page",
     kind: "detail",
@@ -640,10 +642,10 @@ function makeDetailTemplate(project: Project, sku: Sku): Template {
       image({
         id: "detail-product",
         name: "详情产品图",
-        assetRole: "productTransparent",
-        assetId: sku.assets.productTransparent?.id,
-        imageUrl: sku.assets.productTransparent?.url,
-        assetMissing: !sku.assets.productTransparent,
+        assetRole: "detailSlices",
+        assetId: detailImage?.id,
+        imageUrl: detailImage?.url,
+        assetMissing: !detailImage,
         x: 78,
         y: 515,
         width: 810,

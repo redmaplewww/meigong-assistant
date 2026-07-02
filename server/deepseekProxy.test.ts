@@ -13,6 +13,9 @@ const heroTemplateContext = {
   kind: "hero",
   name: "主图",
   layers: [
+    { id: "logo-top", materialSlot: "logo" },
+    { id: "spec-pill", materialSlot: "spec-pill" },
+    { id: "bottom-board", materialSlot: "bottom-board" },
     { id: "product-main" },
     { id: "hero-title" },
     { id: "shipping-text" },
@@ -106,9 +109,35 @@ describe("DeepSeek plan proxy safeguards", () => {
     expect(ensureTemplateCreationWhenRequested(requestBody, deepSeekPlan)).toBe(deepSeekPlan);
   });
 
-  it("creates and selects a deep red board variant when no red board exists", () => {
+  it("does not create a deep red board material for a normal color request", () => {
     const requestBody = {
       prompt: "做深红底板，产品放大，标题醒目",
+      materials: [
+        { id: "bottom-board-classic", slot: "bottom-board", name: "经典蓝色底板", tags: ["blue"] },
+        { id: "bottom-board-deep", slot: "bottom-board", name: "深蓝斜切底板", tags: ["blue", "deep", "斜切"] },
+      ],
+    };
+    const deepSeekPlan = {
+      materialSelection: { "bottom-board": "bottom-board-deep" },
+      actions: [{ id: "model-picked-blue", title: "替换底板", detail: "模型选择了深蓝底板" }],
+    };
+
+    const ensured = ensureDeepRedBoardWhenRequested(requestBody, deepSeekPlan) as typeof deepSeekPlan & {
+      materialCreations: Array<{
+        slot: string;
+        fromMaterialId: string;
+        materialId: string;
+        colorReplacements: Array<{ from: string; to: string }>;
+      }>;
+    };
+
+    expect(ensured.materialSelection["bottom-board"]).toBe("bottom-board-deep");
+    expect(ensured.materialCreations).toBeUndefined();
+  });
+
+  it("creates and selects a deep red board variant only when the user asks to save a material", () => {
+    const requestBody = {
+      prompt: "创建一个深红底板素材并放入素材库，产品放大",
       materials: [
         { id: "bottom-board-classic", slot: "bottom-board", name: "经典蓝色底板", tags: ["blue"] },
         { id: "bottom-board-deep", slot: "bottom-board", name: "深蓝斜切底板", tags: ["blue", "deep", "斜切"] },
@@ -140,7 +169,7 @@ describe("DeepSeek plan proxy safeguards", () => {
 
   it("augments partial LLM red recolor instructions with the complete palette", () => {
     const requestBody = {
-      prompt: "做深红底板，产品放大",
+      prompt: "创建深红底板素材，产品放大",
       materials: [
         { id: "bottom-board-deep", slot: "bottom-board", name: "深蓝斜切底板", tags: ["blue", "deep"] },
       ],
@@ -170,7 +199,7 @@ describe("DeepSeek plan proxy safeguards", () => {
     );
   });
 
-  it("expands a unified red theme request across materials and color patches", () => {
+  it("expands a unified red theme request into color patches without material changes", () => {
     const requestBody = {
       prompt: "把配色统一改成红色，产品图不要盖字",
       materials: [
@@ -188,6 +217,18 @@ describe("DeepSeek plan proxy safeguards", () => {
           name: "材料及性能指标",
           layers: [{ id: "spec-title-pill" }, { id: "spec-title" }, { id: "specs-table" }],
         },
+        {
+          id: "service-promise",
+          kind: "service",
+          name: "服务承诺",
+          layers: [{ id: "service-tile-0", materialSlot: "service-tile" }, { id: "service-title-cn" }],
+        },
+        {
+          id: "detail-page",
+          kind: "detail",
+          name: "详情长图",
+          layers: [{ id: "detail-search", materialSlot: "search-strip" }, { id: "detail-spec-pill", materialSlot: "spec-pill" }],
+        },
       ],
     };
     const deepSeekPlan = {
@@ -199,24 +240,71 @@ describe("DeepSeek plan proxy safeguards", () => {
 
     const ensured = ensureRedThemeWhenRequested(requestBody, deepSeekPlan) as typeof deepSeekPlan & {
       theme: { id: string };
-      materialCreations: Array<{ slot: string; materialId: string; colorReplacements: Array<{ from: string; to: string }> }>;
-      templatePatches: Record<string, Record<string, Record<string, string>>>;
+      materialCreations?: Array<{ slot: string; materialId: string; colorReplacements: Array<{ from: string; to: string }> }>;
+      templatePatches: Record<string, Record<string, Record<string, unknown>>>;
     };
 
     expect(ensured.theme.id).toBe("red");
-    expect(ensured.materialSelection["spec-pill"]).toBe("ai-spec-pill-red");
-    expect(ensured.materialSelection["service-tile"]).toBe("ai-service-tile-red");
-    expect(ensured.materialCreations.map((creation) => creation.slot)).toEqual(
-      expect.arrayContaining(["bottom-board", "spec-pill", "service-tile", "search-strip", "logo"]),
-    );
-    expect(ensured.materialCreations.find((creation) => creation.slot === "spec-pill")?.colorReplacements).toEqual(
-      expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
-    );
+    expect(ensured.materialSelection).toEqual({ "bottom-board": "bottom-board-deep" });
+    expect(ensured.materialCreations).toBeUndefined();
+    expect(ensured.templatePatches["hero-main"]["spec-pill"]).toMatchObject({
+      colorReplacements: expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
+    });
+    expect(ensured.templatePatches["service-promise"]["service-tile-0"]).toMatchObject({
+      colorReplacements: expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
+    });
+    expect(ensured.templatePatches["detail-page"]["detail-search"]).toMatchObject({
+      colorReplacements: expect.arrayContaining([{ from: "#0b70b7", to: "#b51e2c" }]),
+    });
     expect(ensured.templatePatches["spec-table"]["specs-table"]).toMatchObject({
       headerFill: "#b51e2c",
       textColor: "#4f0b15",
     });
     expect(ensured.templateCreations).toHaveLength(0);
+  });
+
+  it("allows a new after-sales service image without explicit style words", () => {
+    const requestBody = {
+      prompt: "生成一张售后服务的新图，服务项先随便填",
+      templates: [
+        heroTemplateContext,
+        {
+          id: "service-promise",
+          kind: "service",
+          name: "服务承诺",
+          layers: [{ id: "service-title-cn" }, { id: "service-tile-0" }],
+        },
+      ],
+    };
+    const deepSeekPlan = {
+      templateCreations: [{ fromTemplateId: "service-promise", templateId: "ai-service-after-sale" }],
+      warnings: [],
+    };
+
+    expect(requestNeedsTemplateCreation(requestBody)).toBe(true);
+    expect(discardTemplateCreationsUnlessRequested(requestBody, deepSeekPlan)).toBe(deepSeekPlan);
+  });
+
+  it("allows a new after-sales rules image from policy-condition wording", () => {
+    const requestBody = {
+      prompt: "生成一份售后规则图，什么情况可以售后什么情况不可以售后",
+      templates: [
+        heroTemplateContext,
+        {
+          id: "service-promise",
+          kind: "service",
+          name: "服务承诺",
+          layers: [{ id: "service-title-cn" }, { id: "service-tile-0" }],
+        },
+      ],
+    };
+    const deepSeekPlan = {
+      templateCreations: [{ fromTemplateId: "service-promise", templateId: "ai-after-sales-rules" }],
+      warnings: [],
+    };
+
+    expect(requestNeedsTemplateCreation(requestBody)).toBe(true);
+    expect(discardTemplateCreationsUnlessRequested(requestBody, deepSeekPlan)).toBe(deepSeekPlan);
   });
 
   it("drops unexpected template creations for normal finished-image plans", () => {

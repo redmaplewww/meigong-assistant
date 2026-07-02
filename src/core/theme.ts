@@ -1,4 +1,4 @@
-import type { Layer, MaterialAsset, MaterialSelection, MaterialSlot, MaterialVariantCreation, Template } from "./types";
+import type { Layer, MaterialSlot, Template } from "./types";
 
 export interface ThemePalette {
   id: string;
@@ -10,11 +10,6 @@ export interface ThemePalette {
   stripe: string;
   border: string;
   textOnPrimary: string;
-}
-
-export interface ThemeMaterialPlan {
-  materialCreations: MaterialVariantCreation[];
-  materialSelection: MaterialSelection;
 }
 
 const redIntentPattern = /(\u6df1\u7ea2|\u9152\u7ea2|\u6697\u7ea2|\u7ea2\u8272|\u7ea2\u8272\u7cfb|red|crimson|burgundy)/i;
@@ -73,7 +68,7 @@ export function createPaletteFromPrimary(primary: string, name = "自定义配�
 }
 
 export function detectThemeFromPrompt(prompt: string): ThemePalette | undefined {
-  if (redIntentPattern.test(prompt) && themeIntentPattern.test(prompt)) return redTheme;
+  if (redIntentPattern.test(prompt) && (themeIntentPattern.test(prompt) || promptWantsRedBoard(prompt))) return redTheme;
   return undefined;
 }
 
@@ -81,7 +76,7 @@ export function promptWantsRedBoard(prompt: string): boolean {
   return redBoardPattern.test(prompt) || (redIntentPattern.test(prompt) && /\u5e95\u677f|board/i.test(prompt));
 }
 
-export function themeColorReplacements(palette: ThemePalette): Array<{ from: string; to: string }> {
+export function themeColorReplacements(palette: ThemePalette, previousPalette?: ThemePalette): Array<{ from: string; to: string }> {
   const replacements = [
     { from: "#0b70b7", to: palette.primary },
     { from: "#0a66a9", to: palette.accent },
@@ -104,6 +99,16 @@ export function themeColorReplacements(palette: ThemePalette): Array<{ from: str
     { from: "#eef6fb", to: palette.soft },
     { from: "#e5eef5", to: palette.soft },
     { from: "#e5eff7", to: palette.soft },
+    ...(previousPalette
+      ? [
+          { from: previousPalette.primary, to: palette.primary },
+          { from: previousPalette.secondary, to: palette.secondary },
+          { from: previousPalette.accent, to: palette.accent },
+          { from: previousPalette.soft, to: palette.soft },
+          { from: previousPalette.stripe, to: palette.stripe },
+          { from: previousPalette.border, to: palette.border },
+        ]
+      : []),
   ];
   const seen = new Set<string>();
   return replacements.filter((replacement) => {
@@ -114,86 +119,24 @@ export function themeColorReplacements(palette: ThemePalette): Array<{ from: str
   });
 }
 
-const slotNames: Record<MaterialSlot, string> = {
-  "bottom-board": "底板",
-  "top-cap": "顶板",
-  logo: "LOGO",
-  "promo-badge": "促销角标",
-  "content-card": "详情卡片",
-  "service-tile": "服务块",
-  "search-strip": "搜索条",
-  "spec-pill": "参数胶囊",
-};
-
-const preferredMaterialIds: Partial<Record<MaterialSlot, string[]>> = {
-  "bottom-board": ["bottom-board-deep", "bottom-board-classic"],
-  "top-cap": ["top-cap-blue-panel"],
-  logo: ["logo-wayiii-classic", "logo-wayiii-stamp"],
-  "promo-badge": ["promo-badge-soft"],
-  "service-tile": ["service-tile-blue"],
-  "search-strip": ["search-strip-blue"],
-  "spec-pill": ["spec-pill-blue"],
-};
-
-function pickThemeBaseMaterial(materials: MaterialAsset[], selection: MaterialSelection, slot: MaterialSlot): MaterialAsset | undefined {
-  const preferred = preferredMaterialIds[slot] ?? [];
-  return (
-    preferred.map((id) => materials.find((material) => material.id === id && material.slot === slot)).find(Boolean) ??
-    materials.find((material) => material.id === selection[slot] && material.slot === slot) ??
-    materials.find((material) => material.slot === slot)
-  );
-}
-
-function themedMaterialId(base: MaterialAsset, palette: ThemePalette): string {
-  if (palette.id === "red" && base.id === "bottom-board-deep") return "ai-bottom-board-deep-red";
-  if (palette.id === "red" && base.id === "spec-pill-blue") return "ai-spec-pill-red";
-  if (palette.id === "red" && base.id === "service-tile-blue") return "ai-service-tile-red";
-  if (palette.id === "red" && base.id === "search-strip-blue") return "ai-search-strip-red";
-  if (palette.id === "red" && base.id === "promo-badge-soft") return "ai-promo-badge-red";
-  if (palette.id === "red" && base.id === "top-cap-blue-panel") return "ai-top-cap-red";
-  if (palette.id === "red" && base.slot === "logo") return `ai-${base.id}-red`;
-  return `theme-${base.id}-${palette.id}-${palette.primary.replace("#", "").toLowerCase()}`.slice(0, 52);
-}
-
-export function createThemeMaterialPlan(
-  materials: MaterialAsset[],
-  currentSelection: MaterialSelection,
-  palette: ThemePalette,
-): ThemeMaterialPlan {
-  const selection: MaterialSelection = { ...currentSelection };
-  const materialCreations: MaterialVariantCreation[] = [];
-  const targetSlots: MaterialSlot[] = ["bottom-board", "top-cap", "logo", "promo-badge", "service-tile", "search-strip", "spec-pill"];
-
-  targetSlots.forEach((slot) => {
-    const base = pickThemeBaseMaterial(materials, selection, slot);
-    if (!base) return;
-    const materialId = themedMaterialId(base, palette);
-    selection[slot] = materialId;
-    if (materials.some((material) => material.id === materialId)) return;
-    materialCreations.push({
-      id: `material-${materialId}`,
-      slot,
-      fromMaterialId: base.id,
-      materialId,
-      name: `${palette.name}${slotNames[slot]}`,
-      reason: `基于 ${base.name} 生成${palette.name}配色变体`,
-      colorReplacements: themeColorReplacements(palette),
-      tags: ["theme", `theme:${palette.id}`, palette.id, palette.name],
-    });
-  });
-
-  return { materialCreations, materialSelection: selection };
-}
-
 const primaryColors = new Set(["#0b70b7", "#0a66a9", "#0b5f99", "#0c75bd", "#0872b8", "#2f8ac4"].map(normalizeColor));
 const secondaryColors = new Set(["#18315f", "#12315a", "#063f68", "#0a4f82"].map(normalizeColor));
 const softColors = new Set(["#eef3f8", "#eef6fb", "#e5eef5", "#e5eff7"].map(normalizeColor));
 const stripeColors = new Set(["#d7dde6"].map(normalizeColor));
 const borderColors = new Set(["#b9c4d2", "#9fb2c4", "#9db9cc", "#b8d4e8"].map(normalizeColor));
+const themeableImageSlots = new Set<MaterialSlot>(["bottom-board", "top-cap", "logo", "promo-badge", "service-tile", "search-strip", "spec-pill"]);
 
-function themedColor(value: string | undefined, palette: ThemePalette): string | undefined {
+function themedColor(value: string | undefined, palette: ThemePalette, previousPalette?: ThemePalette): string | undefined {
   if (!value) return value;
   const normalized = normalizeColor(value);
+  if (previousPalette) {
+    if (normalized === normalizeColor(previousPalette.primary)) return palette.primary;
+    if (normalized === normalizeColor(previousPalette.secondary)) return palette.secondary;
+    if (normalized === normalizeColor(previousPalette.accent)) return palette.accent;
+    if (normalized === normalizeColor(previousPalette.soft)) return palette.soft;
+    if (normalized === normalizeColor(previousPalette.stripe)) return palette.stripe;
+    if (normalized === normalizeColor(previousPalette.border)) return palette.border;
+  }
   if (primaryColors.has(normalized)) return palette.primary;
   if (secondaryColors.has(normalized)) return palette.secondary;
   if (softColors.has(normalized)) return palette.soft;
@@ -202,39 +145,43 @@ function themedColor(value: string | undefined, palette: ThemePalette): string |
   return value;
 }
 
-function applyThemeToLayer(layer: Layer, palette: ThemePalette): Layer {
-  if (layer.type === "text") return { ...layer, color: themedColor(layer.color, palette) ?? layer.color };
+function applyThemeToLayer(layer: Layer, palette: ThemePalette, previousPalette?: ThemePalette): Layer {
+  if (layer.type === "image") {
+    if (!layer.materialSlot || !themeableImageSlots.has(layer.materialSlot)) return layer;
+    return { ...layer, colorReplacements: themeColorReplacements(palette, previousPalette) };
+  }
+  if (layer.type === "text") return { ...layer, color: themedColor(layer.color, palette, previousPalette) ?? layer.color };
   if (layer.type === "shape") {
     return {
       ...layer,
-      fill: themedColor(layer.fill, palette) ?? layer.fill,
-      stroke: themedColor(layer.stroke, palette) ?? layer.stroke,
+      fill: themedColor(layer.fill, palette, previousPalette) ?? layer.fill,
+      stroke: themedColor(layer.stroke, palette, previousPalette) ?? layer.stroke,
     };
   }
   if (layer.type === "table") {
     return {
       ...layer,
-      headerFill: themedColor(layer.headerFill, palette) ?? layer.headerFill,
-      stripeFill: themedColor(layer.stripeFill, palette) ?? layer.stripeFill,
-      borderColor: themedColor(layer.borderColor, palette) ?? layer.borderColor,
-      textColor: themedColor(layer.textColor, palette) ?? layer.textColor,
+      headerFill: themedColor(layer.headerFill, palette, previousPalette) ?? layer.headerFill,
+      stripeFill: themedColor(layer.stripeFill, palette, previousPalette) ?? layer.stripeFill,
+      borderColor: themedColor(layer.borderColor, palette, previousPalette) ?? layer.borderColor,
+      textColor: themedColor(layer.textColor, palette, previousPalette) ?? layer.textColor,
     };
   }
   if (layer.type === "icon") {
     return {
       ...layer,
-      color: themedColor(layer.color, palette) ?? layer.color,
-      fill: themedColor(layer.fill, palette) ?? layer.fill,
+      color: themedColor(layer.color, palette, previousPalette) ?? layer.color,
+      fill: themedColor(layer.fill, palette, previousPalette) ?? layer.fill,
     };
   }
   return layer;
 }
 
-export function applyThemeToTemplate(template: Template, palette: ThemePalette): Template {
+export function applyThemeToTemplate(template: Template, palette: ThemePalette, previousPalette?: ThemePalette): Template {
   return {
     ...template,
-    background: themedColor(template.background, palette) ?? template.background,
-    layers: template.layers.map((layer) => applyThemeToLayer(layer, palette)),
+    background: themedColor(template.background, palette, previousPalette) ?? template.background,
+    layers: template.layers.map((layer) => applyThemeToLayer(layer, palette, previousPalette)),
   };
 }
 
@@ -246,10 +193,14 @@ function diffLayer(before: Layer, after: Layer): Partial<Layer> {
   return patch as Partial<Layer>;
 }
 
-export function buildThemeTemplatePatches(templates: Template[], palette: ThemePalette): Record<string, Record<string, Partial<Layer>>> {
+export function buildThemeTemplatePatches(
+  templates: Template[],
+  palette: ThemePalette,
+  previousPalette?: ThemePalette,
+): Record<string, Record<string, Partial<Layer>>> {
   const patches: Record<string, Record<string, Partial<Layer>>> = {};
   templates.forEach((template) => {
-    const themed = applyThemeToTemplate(template, palette);
+    const themed = applyThemeToTemplate(template, palette, previousPalette);
     themed.layers.forEach((layer, index) => {
       const before = template.layers[index];
       const patch = diffLayer(before, layer);

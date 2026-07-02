@@ -14,7 +14,6 @@ import {
   applyThemeToTemplate,
   buildThemeTemplatePatches,
   createPaletteFromPrimary,
-  createThemeMaterialPlan,
   detectThemeFromPrompt,
   promptWantsRedBoard,
   type ThemePalette,
@@ -162,10 +161,29 @@ function maxZIndex(template: Template): number {
   return template.layers.reduce((max, layer) => Math.max(max, layer.zIndex), 0);
 }
 
+const explicitTemplateCreationPattern =
+  /新模板|新版式|新图层|新增图层|创建图层|另做一版|多做一张|做一张|出一张|生成一张|新图|服务图|售后图|服务承诺|售后服务|创建模板|自己做模板|\bnew template\b|\btemplate variant\b|\badd layer\b|\bnew image\b|\bservice image\b|\bafter-sales\b/i;
+const generatedDeliverablePattern =
+  /((生成|做|出)(一张|一份|一个|新的?|全新)[^，。；\n]*(图|页面|页|模板|版式|主图|详情|参数|服务|售后|规则|政策|承诺)|(创建|新建)(一张|一份|一个)?[^，。；\n]*(图|页面|页|模板|版式|主图|详情|参数|服务|售后|规则|政策|承诺))/i;
+const afterSalesRulesPattern =
+  /(售后|退换|退货|换货|保修|质保)[^，。；\n]*(规则|政策|说明|条件|范围|可售后|不可售后|图|页面|页)|(规则|政策|说明|条件|范围)[^，。；\n]*(售后|退换|退货|换货|保修|质保)|(什么情况|哪些情况)[^，。；\n]*(售后|退换|退货|换货|保修|质保)/i;
+
 function allowTemplateCreation(prompt: string): boolean {
-  return /(\u65b0\u6a21\u677f|\u65b0\u7248\u5f0f|\u65b0\u56fe\u5c42|\u65b0\u589e\u56fe\u5c42|\u521b\u5efa\u56fe\u5c42|\u53e6\u505a\u4e00\u7248|\u591a\u505a\u4e00\u5f20|\u521b\u5efa\u6a21\u677f|\u81ea\u5df1\u505a\u6a21\u677f|\bnew template\b|\btemplate variant\b|\badd layer\b)/i.test(
+  return (
+    explicitTemplateCreationPattern.test(prompt) ||
+    generatedDeliverablePattern.test(prompt) ||
+    afterSalesRulesPattern.test(prompt)
+  );
+}
+
+function promptRequestsMaterialCreation(prompt: string): boolean {
+  return /(\u7d20\u6750\u5e93|\u7d20\u6750|\u521b\u5efa.*\u7d20\u6750|\u65b0\u5efa.*\u7d20\u6750|\u4fdd\u5b58.*\u7d20\u6750|\u52a0\u5165.*\u7d20\u6750|\bmaterial library\b|\bcreate material\b|\bsave material\b)/i.test(
     prompt,
   );
+}
+
+function isThemeVariantMaterialId(materialId: string): boolean {
+  return /^(ai-|theme-).*(red|crimson|burgundy|theme|[0-9a-f]{6})/i.test(materialId);
 }
 
 function sanitizeTheme(rawTheme: unknown, prompt: string): ThemePalette | undefined {
@@ -184,32 +202,6 @@ function sanitizeTheme(rawTheme: unknown, prompt: string): ThemePalette | undefi
     };
   }
   return detectThemeFromPrompt(prompt);
-}
-
-function mergeMaterialCreations(
-  base: MaterialVariantCreation[],
-  additions: MaterialVariantCreation[],
-): MaterialVariantCreation[] {
-  const seen = new Set(base.map((creation) => creation.materialId));
-  return [
-    ...base,
-    ...additions.filter((creation) => {
-      if (seen.has(creation.materialId)) return false;
-      seen.add(creation.materialId);
-      return true;
-    }),
-  ];
-}
-
-function mergeThemeMaterialCreations(
-  base: MaterialVariantCreation[],
-  themeCreations: MaterialVariantCreation[],
-): MaterialVariantCreation[] {
-  const themeSlots = new Set(themeCreations.map((creation) => creation.slot));
-  return mergeMaterialCreations(
-    base.filter((creation) => !themeSlots.has(creation.slot)),
-    themeCreations,
-  );
 }
 
 function mergeTemplatePatches(
@@ -275,6 +267,62 @@ function selectMaterial(
 function materialMatchesText(material: MaterialAsset, words: string[]): boolean {
   const haystack = [material.id, material.name, ...material.tags].join(" ").toLowerCase();
   return words.some((word) => haystack.includes(word.toLowerCase()));
+}
+
+function chooseTemplateForPrompt(templates: Template[] | undefined, prompt: string): Template | undefined {
+  const list = templates ?? [];
+  if (!list.length) return undefined;
+  const byId = (id: string) => list.find((template) => template.id === id);
+  const byKind = (kind: TemplateKind) => list.find((template) => template.kind === kind);
+  const pick = (ids: string[], kinds: TemplateKind[]) => ids.map(byId).find(Boolean) ?? kinds.map(byKind).find(Boolean);
+
+  if (/工程|尺寸|图纸|外形/.test(prompt)) return pick(["drawing-size"], ["drawing"]) ?? list[0];
+  if (/参数|表格|规格|性能/.test(prompt)) return pick(["spec-table"], ["specs"]) ?? list[0];
+  if (/服务|承诺|售后|六宫格|after-sales|service/i.test(prompt)) return pick(["service-promise"], ["service"]) ?? list[0];
+  if (/白底|纯白/.test(prompt)) return pick(["white-product"], ["white"]) ?? list[0];
+  if (/详情|长图/.test(prompt)) return pick(["detail-page"], ["detail"]) ?? list[0];
+  return byId("hero-main") ?? byKind("hero") ?? list[0];
+}
+
+function buildLocalTemplateCreationPatches(baseTemplate: Template, theme: ThemePalette | undefined): Record<string, Partial<Layer>> {
+  const primary = theme?.primary ?? "#0b70b7";
+  if (baseTemplate.kind === "service") {
+    return {
+      "service-title-cn": { y: 145, fontSize: 90, color: primary } as Partial<Layer>,
+      "service-title-en": { y: 292, fontSize: 44, color: primary } as Partial<Layer>,
+      "service-divider": { y: 388, fill: primary } as Partial<Layer>,
+    };
+  }
+  if (baseTemplate.kind === "specs") {
+    return {
+      "spec-title-pill": { x: 280, y: 100, width: 880, fill: primary } as Partial<Layer>,
+      "spec-title": { x: 380, y: 136, width: 680, fontSize: 66 } as Partial<Layer>,
+      "specs-table": { x: 150, y: 335, width: 1140, height: 980, fontSize: 44 } as Partial<Layer>,
+    };
+  }
+  if (baseTemplate.kind === "drawing") {
+    return {
+      "drawing-title": { y: 210, fontSize: 110, color: primary } as Partial<Layer>,
+      "drawing-image": { x: 86, y: 410, width: 1268, height: 590 } as Partial<Layer>,
+      "drawing-note": { y: 1060 } as Partial<Layer>,
+    };
+  }
+  if (baseTemplate.kind === "white") {
+    return {
+      "white-product-image": { x: 48, y: 285, width: 1344, height: 850 } as Partial<Layer>,
+    };
+  }
+  if (baseTemplate.kind === "detail") {
+    return {
+      "detail-title-cn": { fontSize: 84, color: primary } as Partial<Layer>,
+      "detail-product": { x: 58, y: 500, width: 844, height: 455 } as Partial<Layer>,
+      "detail-param-table": { fontSize: 28 } as Partial<Layer>,
+    };
+  }
+  return {
+    "hero-title": { y: 390, fontSize: 90, fontFamily: '"SimHei", "Microsoft YaHei", sans-serif' } as Partial<Layer>,
+    "product-main": { x: 92, y: 500, width: 1256, height: 640 } as Partial<Layer>,
+  };
 }
 
 function findExistingDeepRedBoard(materials: MaterialAsset[]): MaterialAsset | undefined {
@@ -379,6 +427,18 @@ function sanitizeMaterialSelection(
   });
 
   return selection;
+}
+
+function stripThemeVariantMaterialSelection(rawSelection: unknown, materials: MaterialAsset[]): Record<string, unknown> {
+  const raw = asRecord(rawSelection);
+  return Object.fromEntries(
+    Object.entries(raw).filter(([slot, materialId]) => {
+      const id = asString(materialId);
+      if (!id) return false;
+      if (materials.some((material) => material.slot === slot && material.id === id)) return true;
+      return !isThemeVariantMaterialId(id);
+    }),
+  );
 }
 
 function sanitizeMaterialCreations(
@@ -750,18 +810,14 @@ function normalizeDeepSeekPlan(
     .slice(0, 8);
   const templates = context.templates ?? [];
   const theme = sanitizeTheme(raw.theme, prompt);
-  let materialCreations = sanitizeMaterialCreations(raw.materialCreations, context.materials, warnings);
-  let themeMaterialSelection: MaterialSelection = {};
-  if (theme) {
-    const themePlan = createThemeMaterialPlan(context.materials, context.currentSelection, theme);
-    materialCreations = mergeThemeMaterialCreations(materialCreations, themePlan.materialCreations);
-    themeMaterialSelection = themePlan.materialSelection;
-  }
-  const rawMaterialSelection = theme
-    ? {
-        ...asRecord(raw.materialSelection),
-        ...themeMaterialSelection,
-      }
+  const allowMaterialCreation = promptRequestsMaterialCreation(prompt);
+  const materialCreations = sanitizeMaterialCreations(
+    theme && !allowMaterialCreation ? [] : raw.materialCreations,
+    context.materials,
+    warnings,
+  );
+  const rawMaterialSelection = theme && !allowMaterialCreation
+    ? stripThemeVariantMaterialSelection(raw.materialSelection, context.materials)
     : raw.materialSelection;
   const materialSelection = sanitizeMaterialSelection(
     rawMaterialSelection,
@@ -903,16 +959,30 @@ export function createAssistantDraft(prompt: string, context: DraftContext): Ass
   const theme = detectThemeFromPrompt(prompt);
 
   if (theme) {
-    const themePlan = createThemeMaterialPlan(context.materials, selection, theme);
-    materialCreations.push(...themePlan.materialCreations);
-    Object.assign(selection, themePlan.materialSelection);
     Object.assign(templatePatches, mergeTemplatePatches(templatePatches, buildThemeTemplatePatches(context.templates ?? [], theme)));
     actions.push({
       id: `theme-${theme.id}`,
       title: `统一${theme.name}配色`,
-      detail: "同步底板、参数胶囊、服务块、搜索条、LOGO、文字和参数表颜色",
+      detail: "同步底板、参数胶囊、服务块、搜索条、LOGO、文字和参数表颜色，不改变素材库形状选择",
     });
-  } else if (promptWantsRedBoard(prompt) || hasAny(normalized, ["深红", "酒红", "暗红", "红色底板", "红底板", "红色"])) {
+    if (promptRequestsMaterialCreation(prompt) && promptWantsRedBoard(prompt)) {
+      const existingRedBoard = findExistingDeepRedBoard(context.materials);
+      if (existingRedBoard) {
+        selectMaterial(selection, context.materials, "bottom-board", existingRedBoard.id, actions);
+      } else {
+        const creation = createDeepRedBottomBoardCreation(context.materials);
+        if (creation) {
+          materialCreations.push(creation);
+          selection["bottom-board"] = creation.materialId;
+          actions.push({
+            id: "material-create-deep-red-board",
+            title: "创建深红底板素材",
+            detail: `用户明确要求保存素材，基于 ${creation.fromMaterialId} 改色并加入素材库`,
+          });
+        }
+      }
+    }
+  } else if (promptRequestsMaterialCreation(prompt) && (promptWantsRedBoard(prompt) || hasAny(normalized, ["深红", "酒红", "暗红", "红色底板", "红底板", "红色"]))) {
     const existingRedBoard = findExistingDeepRedBoard(context.materials);
     if (existingRedBoard) {
       selectMaterial(selection, context.materials, "bottom-board", existingRedBoard.id, actions);
@@ -1026,7 +1096,7 @@ export function createAssistantDraft(prompt: string, context: DraftContext): Ass
   }
 
   if (allowTemplateCreation(prompt) && !templateCreations.length) {
-    const baseTemplate = (context.templates ?? []).find((template) => template.kind === "hero") ?? context.templates?.[0];
+    const baseTemplate = chooseTemplateForPrompt(context.templates, prompt);
     if (baseTemplate) {
       const templateId = `ai-${baseTemplate.id}-${Date.now()}`;
       templateCreations.push({
@@ -1034,11 +1104,8 @@ export function createAssistantDraft(prompt: string, context: DraftContext): Ass
         fromTemplateId: baseTemplate.id,
         templateId,
         name: `AI 新版式 ${baseTemplate.name}`,
-        reason: "用户明确要求创建新模板，本地后备基于当前模板克隆并新增可编辑图层。",
-        patches: {
-          "hero-title": { y: 390, fontSize: 90, fontFamily: '"SimHei", "Microsoft YaHei", sans-serif' } as Partial<Layer>,
-          "product-main": { x: 92, y: 500, width: 1256, height: 640 } as Partial<Layer>,
-        },
+        reason: "用户要求生成新的成品图/模板，本地后备基于最匹配的现有模板克隆并保留可编辑图层。",
+        patches: buildLocalTemplateCreationPatches(baseTemplate, theme),
         newLayers: [
           {
             id: "ai-accent-pill",
@@ -1098,11 +1165,10 @@ export function createAssistantDraft(prompt: string, context: DraftContext): Ass
 
   if (!actions.length) {
     actions.push({
-      id: "baseline",
-      title: "沿用当前模板",
-      detail: "未识别到明确样式词，保留当前模板套装并进行批量套版",
+      id: "task-inferred",
+      title: "按任务类型生成方案",
+      detail: "保留当前模板套装并按现有 SKU、素材和图层配置进行批量套版",
     });
-    warnings.push("描述里没有明显的样式指令，可补充如“深蓝底板、产品放大、工程图更大、标题醒目”。");
   }
 
   if (!context.sku.assets.productTransparent) warnings.push("当前 SKU 缺少透明产品图，AI 方案会保留质检提醒。");

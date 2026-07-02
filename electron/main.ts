@@ -3,6 +3,7 @@ import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { handleSaveCaseWorkspace } from "../server/caseWorkspace.js";
 import { deepSeekDefaults } from "../server/deepseekConfig.js";
 import { handleDeepSeekPlan } from "../server/deepseekProxy.js";
 
@@ -102,6 +103,20 @@ function startLocalServer(): Promise<number> {
   const deepSeekConfig = resolveDeepSeekConfig();
 
   localServer = createServer((req, res) => {
+    if (req.url?.startsWith("/api/save-case-workspace")) {
+      handleSaveCaseWorkspace(req, res, {
+        outputRoot: join(app.getPath("documents"), "美工助手案例输出"),
+        openFolder: async (folderPath) => {
+          await shell.openPath(folderPath);
+        },
+      }).catch((error) => {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : "案例文件夹保存失败。" }));
+      });
+      return;
+    }
+
     if (req.url?.startsWith("/api/deepseek-plan")) {
       handleDeepSeekPlan(req, res, deepSeekConfig).catch((error) => {
         res.statusCode = 500;

@@ -191,6 +191,7 @@ export interface ImageLayer extends LayerBase {
   materialSlot?: MaterialSlot;
   materialId?: string;
   imageUrl?: string;
+  colorReplacements?: MaterialColorReplacement[];
   fit: "contain" | "cover" | "stretch";
   shadow?: string;
   assetMissing?: boolean;
